@@ -25,7 +25,7 @@ class Command(BaseCommand):
         if max_events:
             config = config.model_copy(update={'max_events': max_events})
         client = LMStudioClient.from_settings(settings.LM_STUDIO)
-        if not set(stages or STAGES) <= {'images', 'publish'}:  # photos and publishing need no LM Studio
+        if not set(stages or STAGES) <= {'images', 'publish', 'reactions'}:  # photos and the site need no LM Studio
             try:
                 client.list_models()
             except LLMError as exc:

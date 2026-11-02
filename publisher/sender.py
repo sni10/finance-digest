@@ -54,6 +54,10 @@ class PublishingClient:
         return self._call('PUT', f'{self.base_url}/publishing/publications/{external_id}/tags',
                           {**self.headers, 'X-Request-Id': request_id}, json={'tags': tags})
 
+    def reactions(self, days: int) -> list[dict]:
+        """The site's published stories of the last days: external_id, points, readers, views."""
+        return self._call('GET', f'{self.base_url}/publishing/reactions?days={days}', self.headers)
+
     def _call(self, method, url, headers, json=None, allow_404=False, **content) -> dict | None:
         try:
             response = self.http.request(method, url, headers=headers, json=json, **content)

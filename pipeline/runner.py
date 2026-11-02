@@ -4,7 +4,8 @@ Phases by model, so each big model is loaded once per run:
 - worker (9B + embeddings): group articles into events; classify ready events; extract and verify their facts;
 - writer (27B): write a card for each event with enough verified facts;
 - worker again: check every sentence of each new card, set the draft's status; tag the checked drafts;
-- no model: a stock photo for each checked draft (Pixabay), then ready and review drafts to the site (publisher/).
+- no model: a stock photo for each checked draft (Pixabay), then ready and review drafts to the site (publisher/),
+  then how readers took the stories already there (likes, views) back onto their events.
 Every step keeps its result in the DB: a run that stops halfway is continued by the next one.
 """
 from collections import Counter
@@ -18,7 +19,7 @@ from django.db.models import Count, OuterRef, Subquery
 from django.utils import timezone
 
 from llm.client import LLMClient, LLMError
-from publisher import outbox
+from publisher import outbox, reactions
 from verification.card_check import Card, CardChecker, checks_to_json
 
 from .models import Draft, Event, Fact, PipelineRun
@@ -30,7 +31,7 @@ from .steps.images import ImageError, ImagePicker, Pixabay
 from .steps.tags import Tagger, key
 from .steps.write import CardWriter
 
-STAGES = ('group', 'facts', 'write', 'check', 'tags', 'images', 'publish')
+STAGES = ('group', 'facts', 'write', 'check', 'tags', 'images', 'publish', 'reactions')
 MIN_INDEPENDENT_SOURCES = 2  # for high-risk events (spec §8 gates)
 MAX_IMAGE_QUERIES = 3
 KNOWN_TAGS = 300  # the most used tags shown to the tagger, to be reused
@@ -290,6 +291,10 @@ class Pipeline:
 
     def publish(self) -> dict:
         return outbox.publish(self.publishing, self.progress)
+
+    def reactions(self) -> dict:
+        """Readers' likes and views of the stories on the site, onto their events."""
+        return reactions.fetch(self.publishing, self.progress)
 
     # ---------------------------------------------------------------------------------------------------------
 

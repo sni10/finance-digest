@@ -18,11 +18,12 @@ class FactInline(admin.TabularInline):
 
 @admin.register(Event)
 class EventAdmin(admin.ModelAdmin):
-    list_display = ['title', 'category', 'high_risk', 'status', 'source_count', 'last_article_at', 'draft_link']
+    list_display = ['title', 'category', 'high_risk', 'status', 'source_count', 'last_article_at', 'draft_link',
+                    'site_points', 'site_readers', 'site_views']
     list_filter = ['status', 'category', 'high_risk']
     search_fields = ['title']
     readonly_fields = ['articles_list', 'first_published_at', 'last_article_at', 'has_new_articles', 'error',
-                       'created_at', 'updated_at']
+                       'site_points', 'site_readers', 'site_views', 'reactions_at', 'created_at', 'updated_at']
     fields = ['title', 'category', 'high_risk', 'status', *readonly_fields]
     inlines = [FactInline]
 

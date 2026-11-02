@@ -32,6 +32,11 @@ class Event(models.Model):
     first_published_at = models.DateTimeField(null=True, blank=True)
     last_article_at = models.DateTimeField(null=True, blank=True, db_index=True)
     has_new_articles = models.BooleanField(default=False, help_text='Articles added after the draft was written')
+    # how readers took the story on the site (stage `reactions`): which topics and sources land
+    site_points = models.PositiveIntegerField(default=0, help_text="Readers' like points, up to 100 each")
+    site_readers = models.PositiveIntegerField(default=0, help_text='Readers who gave points')
+    site_views = models.PositiveIntegerField(default=0, help_text='Once a day per IP')
+    reactions_at = models.DateTimeField(null=True, blank=True, help_text='Last fetched; empty: not on the site')
     error = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
