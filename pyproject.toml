@@ -1,5 +1,5 @@
 [project]
-name = "agregator"
+name = "finance-digest"
 version = "0.1.0"
 description = "IT / AI / Crypto news intelligence: local pipeline (sources, LM Studio, evaluation)"
 requires-python = ">=3.14"
@@ -34,3 +34,14 @@ dev = [
     "coverage>=7.16.2",
     "unittest-xml-reporting>=4.0.0",
 ]
+
+# Version = the latest git tag vX.Y.Z, set by CI from Conventional Commits (feat -> minor, fix -> patch while 0.x)
+[tool.semantic_release]
+tag_format = "v{version}"
+commit_parser = "conventional"
+allow_zero_version = true
+major_on_zero = false
+
+[tool.semantic_release.branches.main]
+match = "main"
+prerelease = false
