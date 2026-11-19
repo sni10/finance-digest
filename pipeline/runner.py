@@ -1,50 +1,44 @@
-"""The pipeline (spec §5): new articles -> events -> facts -> card -> card check -> draft.
+"""The pipeline: new articles -> events -> facts -> digest -> Telegram.
 
 Phases by model, so each big model is loaded once per run:
 - worker (9B + embeddings): group articles into events; classify ready events; extract and verify their facts;
-- writer (27B): write a card for each event with enough verified facts;
-- worker again: check every sentence of each new card, set the draft's status; tag the checked drafts;
-- no model: a stock photo for each checked draft (Pixabay), then ready and review drafts to the site (publisher/),
-  then how readers took the stories already there (likes, views) back onto their events.
+- writer (27B): one digest of the period's most covered events with verified facts, and a rough forecast for
+  gold, Brent and WTI;
+- no model: unsent digests to the Telegram channel.
 Every step keeps its result in the DB: a run that stops halfway is continued by the next one.
 """
-from collections import Counter
 from collections.abc import Callable
 from datetime import timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Count, OuterRef, Subquery
+from django.db.models import Count
 from django.utils import timezone
 
 from llm.client import LLMClient, LLMError
-from publisher import outbox, reactions
-from verification.card_check import Card, CardChecker, checks_to_json
 
-from .models import Draft, Event, Fact, PipelineRun
+from .models import Digest, Event, Fact, PipelineRun
 from .models_manager import LoadSpec, LmsModelManager, NoModelManager
 from .steps.classify import EventClassifier
+from .steps.digest import ASSETS, DigestWriter, EventBrief, digest_title, render
 from .steps.facts import FactExtractor, FactVerifier, check_facts
 from .steps.grouping import Grouper, ungrouped_articles
-from .steps.images import ImageError, ImagePicker, Pixabay
-from .steps.tags import Tagger, key
-from .steps.write import CardWriter
+from .telegram import Telegram, TelegramError
 
-STAGES = ('group', 'facts', 'write', 'check', 'tags', 'images', 'publish', 'reactions')
-MIN_INDEPENDENT_SOURCES = 2  # for high-risk events (spec §8 gates)
-MAX_IMAGE_QUERIES = 3
-KNOWN_TAGS = 300  # the most used tags shown to the tagger, to be reused
+STAGES = ('group', 'facts', 'digest', 'send')
+MIN_INDEPENDENT_SOURCES = 2  # for high-risk events: rumours, unnamed sources, fraud, charges, fines
 
 
 class Pipeline:
     def __init__(self, client: LLMClient, lm_studio, config, manager: LmsModelManager | NoModelManager,
-                 progress: Callable[[str], None] = print, publishing=None, pixabay=None,
+                 progress: Callable[[str], None] = print, digest=None, telegram=None,
                  events: list[int] | None = None):
         self.client = client
-        self.only = events  # rewrite just these events, whatever their status (pipeline --event)
-        self.publishing = publishing or settings.PUBLISHING
-        self.pixabay = pixabay or settings.PIXABAY
+        self.only = events  # facts again for just these events, whatever their status (pipeline --event)
+        self.digest_config = digest or settings.DIGEST
+        self.telegram = telegram or settings.TELEGRAM
         self.config = config
         self.progress = progress
         self.manager = manager
@@ -75,7 +69,7 @@ class Pipeline:
 
     def group(self) -> dict:
         if self.only:
-            return {'articles': 0, 'skipped': 'rewriting chosen events only'}
+            return {'articles': 0, 'skipped': 'chosen events only'}
         articles = ungrouped_articles(timezone.now() - self.window)
         self.progress(f'{len(articles)} new articles')
         if not articles:
@@ -134,7 +128,7 @@ class Pipeline:
         kind = classifier.classify(articles)
         event.category, event.high_risk = ('' if kind.category == 'other' else kind.category), kind.high_risk
         if kind.category == 'other':
-            self._set(event, Event.Status.SKIPPED, 'category other: not technology news')
+            self._set(event, Event.Status.SKIPPED, 'category other: not finance news')
             return {'verified': 0, 'rejected': 0}
 
         checked = check_facts(extractor, verifier, event.title, articles)
@@ -153,148 +147,85 @@ class Pipeline:
             self._set(event, Event.Status.FACTS)
         return {'verified': verified, 'rejected': len(checked) - verified}
 
-    # --- writer: cards ---------------------------------------------------------------------------------------
+    # --- writer: the digest ----------------------------------------------------------------------------------
 
-    def write(self) -> dict:
-        events = Event.objects.filter(status=Event.Status.FACTS).prefetch_related('articles__source')
-        events = list(events.filter(pk__in=self.only) if self.only else events)
-        self.progress(f'{len(events)} events to write')
-        counts = {'events': len(events), 'written': 0, 'failed': 0}
+    def digest_events(self) -> list[Event]:
+        """Events with verified facts, not in a digest yet, with articles in the period: the most covered first.
+        A high-risk event with a single source waits for a second one."""
+        since = timezone.now() - timedelta(hours=self.digest_config.period_hours)
+        events = (Event.objects.filter(status=Event.Status.FACTS, last_article_at__gte=since)
+                  .annotate(source_count=Count('articles__source', distinct=True))
+                  .prefetch_related('articles__source')
+                  .order_by('-source_count', '-last_article_at'))
+        safe = [e for e in events if not e.high_risk or e.source_count >= MIN_INDEPENDENT_SOURCES]
+        return safe[:self.digest_config.max_events]
+
+    def digest(self) -> dict:
+        events = self.digest_events()
+        self.progress(f'{len(events)} events for the digest')
         if not events:
-            return counts
+            return {'events': 0}
+        briefs = {number: self._brief(number, event) for number, event in enumerate(events, 1)}
         self.manager.use(*self.writer)
-        writer = CardWriter(self.client, self.writer_model)
-        for number, event in enumerate(events, 1):
-            facts = list(event.facts.filter(status=Fact.Status.VERIFIED))
-            sources = [f'{a.source.name}: {a.title}' for a in event.articles.all()]
-            try:
-                card = writer.write([fact.statement for fact in facts], sources, len(event.sources))
-            except LLMError as exc:
-                self._fail(event, exc)
-                counts['failed'] += 1
-                self.progress(f'{number:>3}/{len(events)} event {event.pk} FAILED {exc}')
-                continue
-            with transaction.atomic():
-                draft = Draft.objects.create(
-                    event=event, headline=card.headline, summary=card.summary, body=card.body,
-                    written_body=card.body, status=Draft.Status.UNCHECKED, writer_model=self.writer_model,
-                    image_queries=[query.strip() for query in card.image_queries if query.strip()][:MAX_IMAGE_QUERIES],
-                )
-                draft.facts.set(facts)
-                event.title = card.headline[:500]
-                self._set(event, Event.Status.DRAFTED)
-            counts['written'] += 1
-            self.progress(f'{number:>3}/{len(events)} event {event.pk}: {card.headline}')
-        return counts
+        answer = DigestWriter(self.client, self.writer_model).write(list(briefs.values()))
+        title = digest_title(timezone.localtime(timezone=ZoneInfo(self.digest_config.time_zone)))
+        with transaction.atomic():
+            digest = Digest.objects.create(
+                title=title, overview=answer.overview,
+                items=[{**item.model_dump(), 'category': briefs[item.event].category}
+                       for item in answer.items if item.event in briefs],
+                forecast=[{'asset': asset, **getattr(answer.forecast, asset).model_dump()} for asset, _ in ASSETS],
+                messages=render(title, answer, briefs), writer_model=self.writer_model,
+            )
+            digest.events.set(events)
+            for event in events:
+                self._set(event, Event.Status.DIGESTED)
+        written = {item['event'] for item in digest.items}
+        for number, event in zip(briefs, events):
+            if number not in written:
+                self.progress(f'event {event.pk} left out by the writer: {event.title[:60]}')
+        self.progress(f'digest {digest.pk}: {title}, {len(digest.items)} items, {len(digest.forecast)} forecast '
+                      f'lines, {len(digest.messages)} messages')
+        return {'events': len(events), 'items': len(digest.items), 'left_out': len(briefs) - len(written),
+                'digest': digest.pk}
 
-    # --- worker: checks --------------------------------------------------------------------------------------
+    @staticmethod
+    def _brief(number: int, event: Event) -> EventBrief:
+        """The event for the writer; the link goes to its most trusted source."""
+        articles = sorted(event.articles.all(), key=lambda a: (a.source.trust_tier, a.published_at or a.fetched_at))
+        facts = event.facts.filter(status=Fact.Status.VERIFIED).values_list('statement', flat=True)
+        return EventBrief(number=number, category=event.category, sites=event.source_count, facts=list(facts),
+                          link_url=articles[0].canonical_url, link_name=articles[0].source.name)
 
-    def check(self) -> dict:
-        drafts = list(Draft.objects.filter(status=Draft.Status.UNCHECKED).select_related('event')
-                      .prefetch_related('facts', 'event__articles__source'))
-        self.progress(f'{len(drafts)} drafts to check')
-        counts = {'drafts': len(drafts), 'ready': 0, 'review': 0, 'failed': 0}
-        if not drafts:
+    # --- no model: Telegram ----------------------------------------------------------------------------------
+
+    def send(self) -> dict:
+        """Unsent digests to the channel, oldest first. A digest that fails waits for the next run, which posts
+        only its messages not posted yet."""
+        digests = list(Digest.objects.filter(status=Digest.Status.WRITTEN).order_by('created_at'))
+        counts = {'digests': len(digests), 'sent': 0, 'failed': 0}
+        token = self.telegram.bot_token.get_secret_value()
+        if not digests or not token or not self.telegram.chat_id:
+            if digests:
+                self.progress('TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is empty: digests wait unsent')
             return counts
-        self.manager.use(*self.worker)
-        checker = CardChecker(self.client, self.worker_model)
-        for number, draft in enumerate(drafts, 1):
-            facts = [fact.statement for fact in draft.facts.all()]
-            try:
-                result = checker.check(Card(draft.headline, draft.summary, draft.written_body), facts)
-            except LLMError as exc:
-                counts['failed'] += 1
-                self.progress(f'{number:>3}/{len(drafts)} draft {draft.pk} FAILED {exc} (checked again next run)')
-                continue
-            reasons = [f'{c.sentence.part}: "{c.sentence.text}" — {"; ".join(c.problems)}'
-                       for c in result.failed if c.sentence.part != 'body' or result.status == 'review']
-            if result.status == 'review':
-                reasons.insert(0, 'card check: headline or summary unsupported, or too much cut')
-            sources = draft.event.sources
-            if draft.event.high_risk and len(sources) < MIN_INDEPENDENT_SOURCES:
-                reasons.append(f'high-risk event with {len(sources)} source: {MIN_INDEPENDENT_SOURCES} needed')
-            draft.body = result.card.body
-            draft.checks = checks_to_json(result.checks)
-            draft.checker_model = self.worker_model
-            draft.reasons = reasons
-            draft.status = Draft.Status.REVIEW if reasons else Draft.Status.READY
-            draft.save(update_fields=['body', 'checks', 'checker_model', 'reasons', 'status'])
-            counts['ready' if draft.status == Draft.Status.READY else 'review'] += 1
-            cut = len([c for c in result.failed if c.sentence.part == 'body'])
-            self.progress(f'{number:>3}/{len(drafts)} draft {draft.pk}: {draft.status.upper()}'
-                          f'{f", {cut} sentences cut" if cut else ""} — {draft.headline[:70]}')
-        return counts
-
-    def tags(self) -> dict:
-        """Tags for the newest checked draft of each event, stories already on the site included: the site gets
-        them with the next `publish`."""
-        drafts = list(self._newest_checked().filter(tags__isnull=True))
-        self.progress(f'{len(drafts)} drafts to tag')
-        counts = {'drafts': len(drafts), 'tagged': 0, 'failed': 0, 'new_tags': 0}
-        if not drafts:
-            return counts
-        used = Counter(tag for tags in Draft.objects.filter(tags__isnull=False).values_list('tags', flat=True)
-                       for tag in tags)
-        self.manager.use(*self.worker)
-        tagger = Tagger(self.client, self.worker_model)
-        for number, draft in enumerate(drafts, 1):
-            known = [tag for tag, _ in used.most_common(KNOWN_TAGS)]
-            try:
-                draft.tags = tagger.tag(draft.headline, draft.summary, draft.body, known)
-            except LLMError as exc:
-                counts['failed'] += 1
-                self.progress(f'{number:>3}/{len(drafts)} draft {draft.pk} FAILED {exc} (tagged again next run)')
-                continue
-            draft.save(update_fields=['tags'])
-            known_keys = {key(tag) for tag in used}
-            counts['new_tags'] += sum(key(tag) not in known_keys for tag in draft.tags)
-            used.update(draft.tags)
-            counts['tagged'] += 1
-            self.progress(f'{number:>3}/{len(drafts)} draft {draft.pk}: {", ".join(draft.tags) or "no tags"}'
-                          f' — {draft.headline[:50]}')
-        return counts
-
-    def _newest_checked(self):
-        """The newest draft of each event, if it is ready or in review (chosen events only with --event)."""
-        newest = Draft.objects.filter(event=OuterRef('event')).order_by('-id').values('id')[:1]
-        drafts = Draft.objects.filter(status__in=[Draft.Status.READY, Draft.Status.REVIEW], id=Subquery(newest))
-        return drafts.filter(event__in=self.only) if self.only else drafts
-
-    # --- no model: photos and the site ----------------------------------------------------------------------
-
-    def images(self) -> dict:
-        """A photo for the newest checked draft of each event; drafts already on the site get theirs sent too."""
-        drafts = list(self._newest_checked().filter(image__isnull=True, image_searched=False)
-                      .select_related('event'))
-        self.progress(f'{len(drafts)} drafts without a photo')
-        counts = {'drafts': len(drafts), 'found': 0, 'none': 0, 'failed': 0}
-        api_key = self.pixabay.api_key.get_secret_value()
-        if not drafts or not api_key:
-            if drafts:
-                self.progress('PIXABAY_API_KEY is empty: no photos')
-            return counts
-        with httpx.Client(timeout=self.pixabay.timeout, follow_redirects=True) as http:
-            picker = ImagePicker(Pixabay(http, api_key), settings.MEDIA_ROOT)
-            for number, draft in enumerate(drafts, 1):
-                prefix = f'{number:>3}/{len(drafts)} draft {draft.pk}'
+        with httpx.Client(timeout=self.telegram.timeout) as http:
+            bot = Telegram(http, token, self.telegram.chat_id)
+            for digest in digests:
                 try:
-                    draft.image = picker.pick(draft)
-                except ImageError as exc:
+                    for html in digest.messages[len(digest.message_ids):]:
+                        digest.message_ids.append(bot.send(html))
+                except TelegramError as exc:
+                    digest.error = str(exc)
+                    digest.save(update_fields=['message_ids', 'error'])
                     counts['failed'] += 1
-                    self.progress(f'{prefix} FAILED {exc} (tried again next run)')
+                    self.progress(f'digest {digest.pk} FAILED {exc} (sent again next run)')
                     continue
-                draft.image_searched = True
-                draft.save(update_fields=['image', 'image_searched'])
-                counts['found' if draft.image else 'none'] += 1
-                self.progress(f'{prefix}: {draft.image or "none found: the category cover"} — {draft.headline[:60]}')
+                digest.status, digest.sent_at, digest.error = Digest.Status.SENT, timezone.now(), ''
+                digest.save(update_fields=['message_ids', 'status', 'sent_at', 'error'])
+                counts['sent'] += 1
+                self.progress(f'digest {digest.pk} sent: {digest.title}')
         return counts
-
-    def publish(self) -> dict:
-        return outbox.publish(self.publishing, self.progress)
-
-    def reactions(self) -> dict:
-        """Readers' likes and views of the stories on the site, onto their events."""
-        return reactions.fetch(self.publishing, self.progress)
 
     # ---------------------------------------------------------------------------------------------------------
 

@@ -1,13 +1,10 @@
 import json
-import tempfile
-from pathlib import Path
-from unittest import mock
 
 from django.test import TestCase
 
 from evaluation.models import EvalEvent, EvalResult
 from evaluation.runner import rescore_run, run_task
-from evaluation.tasks import CardCheckTask, ClassifyTask, ExtractTask, SameEventTask, VerifyTask, WriteTask
+from evaluation.tasks import ClassifyTask, ExtractTask, SameEventTask, VerifyTask
 from evaluation.tasks.verify import change_number
 from llm.client import Completion, LLMError, Usage
 from sources.models import Article, Category, Source
@@ -153,52 +150,3 @@ class VerifyTaskTests(TaskTestCase):
 
         self.assertEqual(result.metrics['true_support_rate'], 0.0)
         self.assertEqual(EvalResult.objects.filter(run=result).first().output['problems'], ['quote not in articles'])
-
-
-class CardCheckTaskTests(TaskTestCase):
-    def test_traps_are_caught_and_true_sentences_pass(self):
-        def card(user):
-            if 'Model X' in user:
-                return {'headline': 'Model X is 40% cheaper', 'summary': 'Model X costs 40% less.',
-                        'body': 'Model X is 40% cheaper than Model W, its maker says. Model X is 40% cheaper to run.',
-                        'image_queries': ['chip']}
-            return {'headline': 'Bridge loses $12 million', 'summary': 'Attackers drained $12 million.',
-                    'body': 'Attackers drained $12 million from the bridge. The bridge lost $12 million.',
-                    'image_queries': ['bridge']}
-
-        run(WriteTask, card)
-        data = {'traps': {'Model X release': 'Example Corp confirmed the price cut.'},
-                'joins': {'Model X release': 'Model X got cheaper after the launch of Model W.'}, 'known_bad': {}}
-
-        def verdict(user):  # a checker that sees through the trap but not the join
-            return {'verdict': 'unclear' if 'confirmed' in user.rsplit('\n', 1)[1] else 'supports', 'fact_ids': [1]}
-
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / 'traps.json'
-            path.write_text(json.dumps(data), encoding='utf-8')
-            with mock.patch('evaluation.tasks.card_check.DATA', path):
-                result, _ = run(CardCheckTask, verdict)
-
-        metrics = result.metrics
-        self.assertEqual(metrics['cases'], 4)  # 2 cards + 1 trap card + 1 join card
-        self.assertEqual((metrics['missed_rate'], metrics['false_alarm_rate']), (0.5, 0.0))
-        self.assertEqual(metrics['missed'], {'card': 0, 'trap': 0, 'join': 1})
-        self.assertEqual(metrics['card_statuses'], {'passed': 2})
-        self.assertEqual((metrics['trap_statuses'], metrics['join_statuses']), ({'trimmed': 1}, {'passed': 1}))
-
-
-class WriteTaskTests(TaskTestCase):
-    def test_flags_numbers_missing_from_facts_and_leaves_quality_to_a_human(self):
-        def answer(user):
-            if 'Model X' in user:
-                return {'headline': 'Model X is 40% cheaper', 'summary': 'Out now.', 'body': 'It costs 40% less.',
-                        'image_queries': []}
-            return {'headline': 'Bridge loses $15 million', 'summary': 'Hack.', 'body': 'Attackers drained it.', 'image_queries': []}
-
-        result, client = run(WriteTask, answer)
-
-        by_event = {r.event_id: r for r in EvalResult.objects.filter(run=result)}
-        self.assertIsNone(by_event[self.release.pk].correct)
-        self.assertEqual(by_event[self.hack.pk].output['invented_numbers'], ['15000000'])
-        self.assertEqual(result.metrics['cards_with_invented_numbers'], 1)
-        self.assertIn('AI news: Example Corp ships Model X', client.prompts[0])

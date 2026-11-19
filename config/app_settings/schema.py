@@ -83,15 +83,15 @@ class CollectorSettings(Section):
 
 
 class PipelineSettings(Section):
-    """Articles -> events -> facts -> card -> checks -> draft (pipeline/)."""
+    """Articles -> events -> facts -> digest (pipeline/)."""
 
     model_config = SettingsConfigDict(env_prefix='PIPELINE_')
 
     window_days: int = Field(3, ge=1, description='Articles older than this are not grouped; events stop growing')
     group_threshold: float = Field(0.8, gt=0, lt=1, description='Embedding similarity to every event member')
     single_source_wait_hours: int = Field(6, ge=0, description='A one-source event waits this long for others')
-    max_events: int = Field(10, ge=1, description='Events taken to facts and a card in one run (slow: minutes each)')
-    min_facts: int = Field(3, ge=1, description='Fewer verified facts: no card')
+    max_events: int = Field(30, ge=1, description='Events taken to facts in one run, most covered first')
+    min_facts: int = Field(3, ge=1, description='Fewer verified facts: not in the digest')
     # Model loading through the lms CLI: one big model in VRAM at a time (spec §4)
     manage_models: bool = True
     worker_context: int = 8192
@@ -100,23 +100,23 @@ class PipelineSettings(Section):
     idle_ttl: int = Field(300, ge=60, description='Seconds before LM Studio unloads an idle model it was told to load')
 
 
-class PublishingSettings(Section):
-    """The site's publishing API (agregator-backend): ready drafts are sent there (publisher/)."""
+class DigestSettings(Section):
+    """The twice-daily digest (pipeline stages `digest` and `send`)."""
 
-    model_config = SettingsConfigDict(env_prefix='PUBLISHING_')
+    model_config = SettingsConfigDict(env_prefix='DIGEST_')
 
-    url: str = 'http://localhost:8002'  # the backend's dev compose; the container reaches it at host.docker.internal
-    api_key: SecretStr = SecretStr('')  # the backend's PUBLISHING_API_KEY; empty -> nothing is sent
-    timeout: float = Field(30, gt=0, description='Seconds per request')
-    max_attempts: int = Field(10, ge=1, description='Then the job stays failed until resent from the admin')
+    max_events: int = Field(12, ge=1, description='The most covered events of the period that go into one digest')
+    period_hours: int = Field(24, ge=1, description='Events with articles this recent; older ones are left out')
+    time_zone: str = 'Europe/Kyiv'  # the date and "morning/evening" in the digest's title
 
 
-class PixabaySettings(Section):
-    """Stock photos for drafts (pipeline stage `images`): https://pixabay.com/api/docs/ shows the key when logged in."""
+class TelegramSettings(Section):
+    """The bot that posts the digest: @BotFather gives the token; the bot must be an admin of a channel."""
 
-    model_config = SettingsConfigDict(env_prefix='PIXABAY_')
+    model_config = SettingsConfigDict(env_prefix='TELEGRAM_')
 
-    api_key: SecretStr = SecretStr('')  # empty -> the stage is skipped, stories get the category cover
+    bot_token: SecretStr = SecretStr('')  # empty -> digests are written but wait unsent
+    chat_id: str = ''  # @channel_username, or a numeric id
     timeout: float = Field(30, gt=0, description='Seconds per request')
 
 
@@ -127,5 +127,5 @@ class AppSettings(Section):
     lm_studio: LMStudioSettings
     collector: CollectorSettings
     pipeline: PipelineSettings
-    publishing: PublishingSettings
-    pixabay: PixabaySettings
+    digest: DigestSettings
+    telegram: TelegramSettings

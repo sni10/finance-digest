@@ -1,4 +1,4 @@
-"""Pipeline state (spec §6, local DB): events grouped from articles, their facts, and the drafts written from them."""
+"""Pipeline state (local DB): events grouped from articles, their facts, and the digests written from them."""
 from django.db import models
 
 from sources.models import Article, Category
@@ -18,11 +18,11 @@ class Event(models.Model):
     class Status(models.TextChoices):
         COLLECTING = 'collecting', 'Waiting for more sources'
         FACTS = 'facts', 'Facts verified'
-        DRAFTED = 'drafted', 'Draft written'
-        SKIPPED = 'skipped', 'Not for the site (category other, too few facts)'
+        DIGESTED = 'digested', 'In a digest'
+        SKIPPED = 'skipped', 'Not for the digest (category other, too few facts)'
         FAILED = 'failed', 'A step failed: see error'
 
-    title = models.CharField(max_length=500, help_text='Title of the first article until a draft exists')
+    title = models.CharField(max_length=500, help_text='Title of the first article of the event')
     category = models.CharField(max_length=10, choices=Category, blank=True)
     high_risk = models.BooleanField(
         default=False, help_text='Rumours and unnamed sources, fraud, charges and fines: two sources needed',
@@ -31,12 +31,7 @@ class Event(models.Model):
     status = models.CharField(max_length=20, choices=Status, default=Status.COLLECTING, db_index=True)
     first_published_at = models.DateTimeField(null=True, blank=True)
     last_article_at = models.DateTimeField(null=True, blank=True, db_index=True)
-    has_new_articles = models.BooleanField(default=False, help_text='Articles added after the draft was written')
-    # how readers took the story on the site (stage `reactions`): which topics and sources land
-    site_points = models.PositiveIntegerField(default=0, help_text="Readers' like points, up to 100 each")
-    site_readers = models.PositiveIntegerField(default=0, help_text='Readers who gave points')
-    site_views = models.PositiveIntegerField(default=0, help_text='Once a day per IP')
-    reactions_at = models.DateTimeField(null=True, blank=True, help_text='Last fetched; empty: not on the site')
+    has_new_articles = models.BooleanField(default=False, help_text='Articles added after it went into a digest')
     error = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -74,54 +69,31 @@ class Fact(models.Model):
         return self.statement
 
 
-class StockImage(models.Model):
-    """A stock photo picked for an event's drafts (stage `images`), kept in MEDIA_ROOT until it is on the site."""
-
-    external_id = models.CharField(max_length=100, unique=True, help_text='pixabay-<id>: never used for two events')
-    source = models.CharField(max_length=20)
-    file = models.CharField(max_length=300, help_text='Relative to MEDIA_ROOT')
-    author = models.CharField(max_length=200)
-    author_url = models.URLField(max_length=500, blank=True)
-    page_url = models.URLField(max_length=500)
-    query = models.CharField(max_length=200, help_text='The search that found it')
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return self.external_id
-
-
-class Draft(models.Model):
-    """A news card for an event, after the checks. Published from here once the server side exists."""
+class Digest(models.Model):
+    """One morning or evening digest: the period's most covered events in short, and a rough forecast."""
 
     class Status(models.TextChoices):
-        UNCHECKED = 'unchecked', 'Written, card check pending'
-        READY = 'ready', 'Ready to publish'
-        REVIEW = 'review', 'Needs a human'
-        BLOCKED = 'blocked', 'Not publishable'
+        WRITTEN = 'written', 'Written, not sent yet'
+        SENT = 'sent', 'Sent to Telegram'
 
-    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='drafts')
-    headline = models.CharField(max_length=300)
-    summary = models.TextField()
-    body = models.TextField(help_text='After the card check: failed sentences cut')
-    written_body = models.TextField(help_text='As the writer wrote it')
-    image_queries = models.JSONField(default=list, blank=True,
-                                     help_text='Stock photo searches from the writer: abstract, no names or brands')
-    image = models.ForeignKey(StockImage, null=True, blank=True, on_delete=models.SET_NULL, related_name='drafts')
-    tags = models.JSONField(null=True, blank=True, help_text='Stage `tags`: None until tagged')
-    image_searched = models.BooleanField(default=False, help_text='Searched once: none found -> the category cover')
-    status = models.CharField(max_length=20, choices=Status, db_index=True)
-    reasons = models.JSONField(default=list, blank=True, help_text='Why it needs review or is blocked')
-    checks = models.JSONField(default=list, blank=True, help_text='Card check: every sentence with its verdict')
-    facts = models.ManyToManyField(Fact, related_name='drafts')
+    events = models.ManyToManyField(Event, related_name='digests')
+    title = models.CharField(max_length=200)
+    overview = models.TextField(help_text='The main theme of the period, 1-3 sentences')
+    items = models.JSONField(default=list, help_text='[{event, category, headline, text}] as the writer gave them')
+    forecast = models.JSONField(default=list, help_text='[{asset, direction, reason}] for gold, brent, wti')
+    messages = models.JSONField(default=list, help_text='The Telegram HTML messages, as sent')
+    status = models.CharField(max_length=20, choices=Status, default=Status.WRITTEN, db_index=True)
     writer_model = models.CharField(max_length=200)
-    checker_model = models.CharField(max_length=200, blank=True)
+    message_ids = models.JSONField(default=list, blank=True)
+    error = models.TextField(blank=True, help_text='The last failed send')
     created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['-created_at']
 
     def __str__(self):
-        return self.headline
+        return self.title
 
 
 class PipelineRun(models.Model):

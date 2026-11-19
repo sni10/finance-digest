@@ -78,12 +78,3 @@ class EvalResult(models.Model):
 
     class Meta:
         ordering = ['id']
-
-
-class WrittenCard(EvalResult):
-    """Answers of the write task, as cards to read in the admin (Evaluation -> Cards)."""
-
-    class Meta:
-        proxy = True
-        verbose_name = 'card'
-        ordering = ['-run_id', 'event_id']

@@ -133,7 +133,7 @@ def _attach(event: Event, article: Article) -> None:
     event.articles.add(article)
     event.first_published_at = min(filter(None, [event.first_published_at, published]))
     event.last_article_at = max(filter(None, [event.last_article_at, published]))
-    if event.status == Event.Status.DRAFTED:
+    if event.status == Event.Status.DIGESTED:
         event.has_new_articles = True
     event.save(update_fields=['first_published_at', 'last_article_at', 'has_new_articles', 'updated_at'])
 
