@@ -22,9 +22,9 @@ def event(title, category, *sources):
 
 class ReactionTests(TestCase):
     def setUp(self):
-        self.wired = Source.objects.create(name='Wired', slug='wired', feed_url='https://e.com/w', category=Category.IT)
+        self.wired = Source.objects.create(name='Wired', slug='wired', feed_url='https://e.com/w', category=Category.MACRO)
         self.coindesk = Source.objects.create(name='CoinDesk', slug='coindesk', feed_url='https://e.com/c',
-                                              category=Category.CRYPTO)
+                                              category=Category.ENERGY)
         self.liked = event('liked', 'it', self.wired, self.wired)  # two articles of one source: counted once
         self.plain = event('plain', 'crypto', self.coindesk)
         self.never_sent = event('never-sent', 'it', self.wired)

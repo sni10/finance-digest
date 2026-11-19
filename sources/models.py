@@ -2,9 +2,10 @@ from django.db import models
 
 
 class Category(models.TextChoices):
-    IT = 'it', 'IT'
-    AI = 'ai', 'AI'
-    CRYPTO = 'crypto', 'Crypto'
+    MACRO = 'macro', 'Macro: central banks, rates, economy'
+    MARKETS = 'markets', 'Markets: stocks, bonds, currencies'
+    METALS = 'metals', 'Metals: gold, silver'
+    ENERGY = 'energy', 'Energy: oil, gas'
 
 
 class Source(models.Model):
@@ -19,7 +20,7 @@ class Source(models.Model):
     site_url = models.URLField(max_length=500, blank=True)
     category = models.CharField(max_length=10, choices=Category)
     trust_tier = models.PositiveSmallIntegerField(
-        default=2, help_text='1 = primary (vendor, official, research), 2 = established media, 3 = aggregator / blog',
+        default=2, help_text='1 = primary (central bank, agency, regulator), 2 = established media, 3 = aggregator / blog',
     )
     license_policy = models.CharField(max_length=20, choices=License, default=License.UNVERIFIED)
     enabled = models.BooleanField(default=True)

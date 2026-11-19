@@ -13,7 +13,7 @@ SEARCH_URL = 'https://pixabay.com/api/'
 MIN_WIDTH = 1200  # the site's largest variant
 MAX_BYTES = 15 * 1024 * 1024
 # When the writer's searches find nothing new
-CATEGORY_QUERIES = {'ai': 'artificial intelligence', 'it': 'computer technology', 'crypto': 'cryptocurrency'}
+CATEGORY_QUERIES = {'macro': 'central bank', 'markets': 'stock market', 'metals': 'gold bars', 'energy': 'oil rig'}
 
 
 class ImageError(Exception):

@@ -34,7 +34,7 @@ class ImagePickerTests(TestCase):
         self.media = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.media, ignore_errors=True)
 
-    def draft(self, queries, category='ai'):
+    def draft(self, queries, category='markets'):
         event = Event.objects.create(title='t', category=category, status=Event.Status.DRAFTED)
         return Draft.objects.create(event=event, headline='h', summary='s', body='b', written_body='b',
                                     status=Draft.Status.READY, writer_model='w', image_queries=queries)
@@ -55,11 +55,11 @@ class ImagePickerTests(TestCase):
         self.assertEqual((self.media / image.file).read_bytes(), JPEG)
 
     def test_the_category_is_searched_when_the_writers_queries_find_nothing(self):
-        site = FakePixabay({'artificial intelligence': [hit(5)]})
+        site = FakePixabay({'stock market': [hit(5)]})
 
         image = self.pick(site, self.draft(['glowing abstract thing']))
 
-        self.assertEqual(site.searches, ['glowing abstract thing', 'artificial intelligence'])
+        self.assertEqual(site.searches, ['glowing abstract thing', 'stock market'])
         self.assertEqual(image.external_id, 'pixabay-5')
 
     def test_nothing_found_and_a_later_draft_of_the_event_keeps_the_photo(self):

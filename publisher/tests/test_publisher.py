@@ -53,10 +53,10 @@ class FakeSite:
 class PublisherTests(TestCase):
     def setUp(self):
         source = Source.objects.create(name='CoinDesk', slug='coindesk', feed_url='https://example.com/f',
-                                       category=Category.CRYPTO)
+                                       category=Category.ENERGY)
         article = Article.objects.create(source=source, canonical_url='https://example.com/a', title='ETF outflows',
                                          content_hash='a', published_at=timezone.now() - timedelta(hours=3))
-        self.event = Event.objects.create(title='ETF outflows', category='crypto', status=Event.Status.DRAFTED,
+        self.event = Event.objects.create(title='ETF outflows', category='energy', status=Event.Status.DRAFTED,
                                           first_published_at=article.published_at)
         self.event.articles.add(article)
         fact = Fact.objects.create(event=self.event, article=article, statement='ETFs lost $635M.', quote='q',
@@ -85,7 +85,7 @@ class PublisherTests(TestCase):
 
         payload = OutboundJob.objects.get().payload
         self.assertEqual((payload['external_id'], payload['status'], payload['category']),
-                         (f'event-{self.event.pk}', 'published', 'crypto'))
+                         (f'event-{self.event.pk}', 'published', 'energy'))
         self.assertEqual(payload['body_md'], 'First paragraph.\n\nSecond.')
         self.assertEqual(payload['sources'][0]['publisher'], 'CoinDesk')
         self.assertEqual(payload['quality']['verified_claims'], 1)

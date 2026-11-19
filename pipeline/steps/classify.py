@@ -7,26 +7,27 @@ from sources.models import Article
 from .common import ModelStep, article_block
 
 CATEGORIES = """Categories:
-- it: software development, infrastructure, cybersecurity (hacks, breaches, vulnerabilities, malware, certificates,
-  encryption), open source, hardware, big tech business
-- ai: machine learning, LLMs, generative AI, AI agents, AI research, AI chips and AI policy
-- crypto: cryptocurrencies and blockchains only: Bitcoin, Ethereum, stablecoins, tokens, DeFi, exchanges,
-  crypto ETFs, and hacks or regulation of those
-- other: anything else (not technology news)
-"crypto" means cryptocurrency, not cryptography: a hack, breach or vulnerability is "it" unless it is about
-cryptocurrency or a blockchain. If an article fits several categories, pick the one it is mainly about."""
+- macro: central banks and interest rates, inflation, jobs, GDP and other economic data, government budgets and debt,
+  tariffs and trade, sanctions and geopolitics that move economies
+- markets: stock indexes and shares, company earnings, bonds and yields, currencies, funds, market regulation
+- metals: gold, silver, platinum, copper and other metals, miners and their output
+- energy: crude oil, natural gas, fuels, OPEC, refining, pipelines and tankers, power prices
+- other: anything else (not finance or economy news)
+If an article fits several categories, pick the one it is mainly about: a Fed decision is "macro" even when the
+article covers the market reaction; an oil price move is "energy"."""
 
-ARTICLE_SYSTEM = f"""You classify technology news articles for an English news site.
+ARTICLE_SYSTEM = f"""You classify finance and economy news articles for a daily markets digest.
 {CATEGORIES}
 Answer with JSON only."""
 
-EVENT_SYSTEM = f"""You classify one news event, given the articles that report it, for an English technology news site.
+EVENT_SYSTEM = f"""You classify one news event, given the articles that report it, for a daily markets digest.
 {CATEGORIES}
-high_risk: true if the event is a hack, theft or breach; criminal charges, arrests or lawsuits; fines, sanctions or
-regulation; or crypto asset prices and fund flows. Such news needs two independent sources before it is published.
+high_risk: true if the event rests on unnamed sources or rumours ("people familiar", "sources say"); is about fraud,
+charges, lawsuits or fines; or is a market-moving claim not yet confirmed by an official body. Such news needs two
+independent sources before it goes into the digest.
 Answer with JSON only."""
 
-Category = Literal['it', 'ai', 'crypto', 'other']
+Category = Literal['macro', 'markets', 'metals', 'energy', 'other']
 
 
 class ArticleAnswer(BaseModel):

@@ -76,7 +76,7 @@ class LMStudioSettings(Section):
 class CollectorSettings(Section):
     model_config = SettingsConfigDict(env_prefix='COLLECTOR_')
 
-    user_agent: str = 'agregator-collector/0.1 (+https://github.com/sni10)'
+    user_agent: str = 'finance-digest-collector/0.1 (+https://github.com/sni10)'
     timeout: int = Field(20, ge=1, description='One HTTP request, seconds')
     full_text: bool = True  # also download article pages and extract the text (trafilatura); evidence needs it
     max_entries: int = Field(50, ge=1, description='Newest entries taken from one feed per run')

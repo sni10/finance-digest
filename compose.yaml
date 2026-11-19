@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     ports:
-      - "127.0.0.1:5433:5432"  # 5433: the image-gallery db already takes 5432; uv runs and the IDE connect here
+      - "127.0.0.1:5436:5432"  # 5432-5435 are taken by other local projects; uv runs and the IDE connect here
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -30,7 +30,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "127.0.0.1:8001:8000"  # admin: http://localhost:8001/admin/
+      - "127.0.0.1:8003:8000"  # admin: http://localhost:8003/admin/ (8001, 8002, 8010 are taken)
     depends_on:
       db:
         condition: service_healthy

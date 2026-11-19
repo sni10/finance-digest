@@ -25,7 +25,7 @@ class Event(models.Model):
     title = models.CharField(max_length=500, help_text='Title of the first article until a draft exists')
     category = models.CharField(max_length=10, choices=Category, blank=True)
     high_risk = models.BooleanField(
-        default=False, help_text='Hacks, charges and lawsuits, fines and regulation, crypto prices: two sources needed',
+        default=False, help_text='Rumours and unnamed sources, fraud, charges and fines: two sources needed',
     )
     articles = models.ManyToManyField(Article, related_name='events')
     status = models.CharField(max_length=20, choices=Status, default=Status.COLLECTING, db_index=True)

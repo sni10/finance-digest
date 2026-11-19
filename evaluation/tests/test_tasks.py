@@ -41,35 +41,35 @@ def run(task_cls, answer):
 class TaskTestCase(TestCase):
     @classmethod
     def setUpTestData(cls):
-        ai = Source.objects.create(name='AI news', slug='ai', feed_url='https://example.com/ai', category=Category.AI)
+        ai = Source.objects.create(name='AI news', slug='ai', feed_url='https://example.com/ai', category=Category.MARKETS)
         crypto = Source.objects.create(name='Coins', slug='coins', feed_url='https://example.com/c',
-                                       category=Category.CRYPTO)
-        cls.release = EvalEvent.objects.create(title='Model X release', category=Category.AI)
+                                       category=Category.ENERGY)
+        cls.release = EvalEvent.objects.create(title='Model X release', category=Category.MARKETS)
         cls.release.articles.set([
             article(ai, 'x1', 'Example Corp ships Model X', 'Example Corp released Model X on Monday. '
                                                             'It is 40% cheaper than Model W.'),
             article(ai, 'x2', 'Model X is out', 'Model X from Example Corp costs 40% less to run.'),
         ])
         cls.release.facts.create(statement='Model X is 40% cheaper than Model W', kind='number')
-        cls.hack = EvalEvent.objects.create(title='Bridge hack', category=Category.CRYPTO, high_risk=True)
+        cls.hack = EvalEvent.objects.create(title='Bridge hack', category=Category.ENERGY, high_risk=True)
         cls.hack.articles.set([article(crypto, 'h1', 'Bridge drained', 'Attackers drained $12 million from a bridge.')])
         cls.hack.facts.create(statement='Attackers drained $12 million from the bridge', kind='number')
 
 
 class ClassifyTaskTests(TaskTestCase):
     def test_scores_against_event_category_and_lists_mistakes(self):
-        result, _ = run(ClassifyTask, lambda user: {'category': 'ai'})
+        result, _ = run(ClassifyTask, lambda user: {'category': 'markets'})
 
         self.assertEqual(result.metrics['cases'], 3)
         self.assertEqual(result.metrics['accuracy'], round(2 / 3, 3))
-        self.assertEqual(result.metrics['mistakes'], {'crypto -> ai': 1})
+        self.assertEqual(result.metrics['mistakes'], {'energy -> markets': 1})
         # the hack is the only high-risk event: its one article was misclassified
         self.assertEqual((result.metrics['high_risk']['cases'], result.metrics['high_risk']['accuracy']), (1, 0.0))
 
     def test_no_high_risk_section_without_high_risk_events(self):
         EvalEvent.objects.update(high_risk=False)
 
-        result, _ = run(ClassifyTask, lambda user: {'category': 'ai'})
+        result, _ = run(ClassifyTask, lambda user: {'category': 'markets'})
 
         self.assertNotIn('high_risk', result.metrics)
 
@@ -116,7 +116,7 @@ class ExtractTaskTests(TaskTestCase):
 
 class RescoreTests(TaskTestCase):
     def test_rescoring_restores_scores_and_metrics_without_calling_the_model(self):
-        result, client = run(ClassifyTask, lambda user: {'category': 'ai'})
+        result, client = run(ClassifyTask, lambda user: {'category': 'markets'})
         expected_metrics = dict(result.metrics)
         EvalResult.objects.filter(run=result).update(correct=True)
         result.metrics = {}

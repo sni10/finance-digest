@@ -35,7 +35,7 @@ class FakeLM:
         if step.startswith('You decide whether two'):
             value = {'same_event': True, 'reason': 'same release'}
         elif step.startswith('You classify one news event'):
-            value = {'category': 'crypto', 'high_risk': True} if hack else {'category': 'ai', 'high_risk': False}
+            value = {'category': 'energy', 'high_risk': True} if hack else {'category': 'markets', 'high_risk': False}
         elif step.startswith('You extract'):
             article_id = int(user.split('<article id="', 1)[1].split('"', 1)[0])
             lines = (HACK if hack else RELEASE).split('\n')
@@ -82,10 +82,10 @@ def make_article(source, slug, title, text, hours_ago):
 
 class PipelineTests(TestCase):
     def setUp(self):
-        ai = Source.objects.create(name='AI news', slug='ai', feed_url='https://example.com/ai', category=Category.AI)
-        tech = Source.objects.create(name='Tech', slug='tech', feed_url='https://example.com/t', category=Category.IT)
+        ai = Source.objects.create(name='AI news', slug='ai', feed_url='https://example.com/ai', category=Category.MARKETS)
+        tech = Source.objects.create(name='Tech', slug='tech', feed_url='https://example.com/t', category=Category.MACRO)
         coins = Source.objects.create(name='Coins', slug='coins', feed_url='https://example.com/c',
-                                      category=Category.CRYPTO)
+                                      category=Category.ENERGY)
         make_article(ai, 'x1', 'Example Corp ships Model X', RELEASE, hours_ago=2)
         make_article(tech, 'x2', 'Model X is out, and cheaper', RELEASE, hours_ago=1)
         make_article(coins, 'h1', 'Bridgy bridge drained', HACK, hours_ago=10)
@@ -104,7 +104,7 @@ class PipelineTests(TestCase):
         run = self.run_pipeline()
 
         self.assertEqual(run.stats['group']['new_events'], 2)
-        release, hack = Event.objects.get(category='ai'), Event.objects.get(category='crypto')
+        release, hack = Event.objects.get(category='markets'), Event.objects.get(category='energy')
         self.assertEqual(release.articles.count(), 2)
 
         # the invented "70 billion parameters" fact fails the code check and is never verified
@@ -160,13 +160,13 @@ class PipelineTests(TestCase):
 
     def test_a_chosen_event_is_written_again(self):
         self.run_pipeline()
-        release = Event.objects.get(category='ai')
+        release = Event.objects.get(category='markets')
         calls = len(self.lm.calls)
 
         run = self.run_pipeline(events=[release.pk])
 
         self.assertEqual(release.drafts.count(), 2)
-        self.assertEqual(Event.objects.get(category='crypto').drafts.count(), 1)  # the other one is left alone
+        self.assertEqual(Event.objects.get(category='energy').drafts.count(), 1)  # the other one is left alone
         self.assertEqual(run.stats['group'], {'articles': 0, 'skipped': 'rewriting chosen events only'})
         self.assertGreater(len(self.lm.calls), calls)
 
@@ -176,13 +176,13 @@ class PipelineTests(TestCase):
 
         self.run_pipeline()
 
-        release = Event.objects.get(category='ai')
+        release = Event.objects.get(category='markets')
         self.assertEqual((release.articles.count(), release.has_new_articles), (3, True))
 
 
 class QuoteContextTests(TestCase):
     def test_the_quote_paragraph_and_its_neighbours(self):
-        source = Source.objects.create(name='S', slug='s', feed_url='https://example.com/s', category=Category.AI)
+        source = Source.objects.create(name='S', slug='s', feed_url='https://example.com/s', category=Category.MARKETS)
         article = make_article(source, 'q', 'Title', 'One.\nTwo has the quote.\nThree.\nFour.', hours_ago=1)
 
         self.assertEqual(quote_context('the quote', article), 'One.\nTwo has the quote.\nThree.')

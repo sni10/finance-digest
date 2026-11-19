@@ -13,7 +13,7 @@ class FindGroupsTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.sources = [Source.objects.create(name=f'S{n}', slug=f's{n}', feed_url=f'https://example.com/{n}',
-                                             category=Category.CRYPTO) for n in range(3)]
+                                             category=Category.ENERGY) for n in range(3)]
 
     def articles(self, *specs):
         """specs: (source index, days after DAY)"""
