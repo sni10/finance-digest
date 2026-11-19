@@ -28,8 +28,8 @@ jobs:
           FROM: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           TO: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
-          # first push of a branch has no "before": lint just the pushed commit
-          if [ -z "$FROM" ] || [ "$FROM" = "0000000000000000000000000000000000000000" ]; then FROM="$TO~1"; fi
+          # first push of a branch has no "before", a force push has one that is gone: lint just the pushed commit
+          if ! git merge-base --is-ancestor "$FROM" "$TO" 2>/dev/null; then FROM="$TO~1"; fi
           npx --yes -p @commitlint/cli@21 -p @commitlint/config-conventional@21 \
             commitlint --from "$FROM" --to "$TO" --verbose
       - name: No Claude/Anthropic as author, committer or co-author
@@ -37,7 +37,8 @@ jobs:
           FROM: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           TO: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
-          if [ -z "$FROM" ] || [ "$FROM" = "0000000000000000000000000000000000000000" ]; then RANGE="$TO"; else RANGE="$FROM..$TO"; fi
+          # first push or a force push (old "before" is gone): check the whole history, it is small
+          if git merge-base --is-ancestor "$FROM" "$TO" 2>/dev/null; then RANGE="$FROM..$TO"; else RANGE="$TO"; fi
           if git log --format='%H %an <%ae> | %cn <%ce>%n%B' "$RANGE" \
               | grep -iE '(co-authored-by:.*(claude|anthropic))|noreply@anthropic\.com|generated with \[claude code\]'; then
             echo "::error::A commit names Claude/Anthropic as author or co-author. Rewrite it."
