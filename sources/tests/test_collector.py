@@ -47,7 +47,7 @@ class FakeExtractor:
 
 def make_source(**fields):
     return Source.objects.create(**{
-        'name': 'Example', 'slug': 'example', 'feed_url': 'https://example.com/feed', 'category': Category.AI, **fields,
+        'name': 'Example', 'slug': 'example', 'feed_url': 'https://example.com/feed', 'category': Category.MARKETS, **fields,
     })
 
 
@@ -176,6 +176,15 @@ class CollectSourceTests(TestCase):
         self.assertEqual((Article.objects.get().extract_attempts, extractor.calls), (3, 6))
 
 
+class CollectSourceRepeatedEntryTests(TestCase):
+    def test_an_article_listed_twice_in_one_feed_is_stored_once(self):
+        entries = [FeedEntry(url='https://example.com/a', title='A'), FeedEntry(url='https://example.com/a', title='A')]
+
+        stats = collect_source(make_source(), FakeCollector(entries), FakeExtractor({'https://example.com/a': LONG}))
+
+        self.assertEqual((Article.objects.count(), stats.new, stats.known), (1, 1, 1))
+
+
 class ExtractTextTests(TestCase):
     def test_downloads_a_teaser_again_once(self):
         extractor = FakeExtractor({'u': ['Teaser', LONG]})
@@ -189,6 +198,11 @@ class ExtractTextTests(TestCase):
 
         self.assertEqual(extract_text(extractor, 'u', sleep=lambda seconds: None), 'Copyright notice only')
         self.assertEqual(extractor.calls, 2)
+
+    def test_a_malformed_redirect_gives_no_text_instead_of_stopping_the_run(self):
+        extractor = mock.Mock(extract=mock.Mock(side_effect=ValueError("unknown url type: '/pressroom/x.php'")))
+
+        self.assertEqual(extract_text(extractor, 'u', sleep=lambda seconds: None), '')
 
 
 class CleanTextTests(TestCase):

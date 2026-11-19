@@ -131,6 +131,7 @@ def collect_source(source: Source, collector: Collector, extractor: TextExtracto
             stats.known += 1
             continue
         stored.append(_store(source, entry, extractor, stats))
+        known.add(entry.url)  # a feed may list one article twice (GoldSeek)
     if extractor:
         retried = _retry_failed(source, extractor)
         # after the whole batch: on a source's first run the batch is the only history to find boilerplate in
@@ -202,7 +203,7 @@ def extract_text(extractor: TextExtractor, url: str, boilerplate: frozenset[str]
             sleep(RETRY_PAUSE)
         try:
             text = normalize_paragraphs(extractor.extract(url, boilerplate) or '')
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, ValueError) as exc:  # ValueError: a redirect to a malformed URL (CNBC)
             log.info('extract %s: %s', url, exc)
             return text
         if len(text) >= cleanup.MIN_TEXT_CHARS:
