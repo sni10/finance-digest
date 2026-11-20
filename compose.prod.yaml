@@ -1,0 +1,35 @@
+# The bot server: the database stays up, the app only runs as a job twice a day
+# (deploy/finance-digest.timer -> `docker compose run --rm app`), so nothing else holds memory between runs.
+# LM Studio stays on the owner's PC; the app reaches it over Tailscale (LM_STUDIO_BASE_URL in .env).
+services:
+  db:
+    image: pgvector/pgvector:0.8.7-pg16-bookworm
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 400m  # small server, no swap to spare: past this only the database dies, not the other services
+    restart: unless-stopped
+
+  app:
+    image: ghcr.io/sni10/finance-digest:${IMAGE_TAG:?set IMAGE_TAG in .env, e.g. v0.3.0}
+    env_file: .env
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+    command: ["sh", "-c", "python manage.py collect && python manage.py pipeline"]
+    mem_limit: 400m  # a run peaks at ~200-300 MB; past this the run dies, not the bot next to it
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: [job]  # never started by `up`: only `docker compose run --rm app`
+
+volumes:
+  pgdata:

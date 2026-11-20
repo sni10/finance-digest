@@ -1,0 +1,9 @@
+# Every 3 hours between the digests (Kyiv time). While the PC is off, the run fails and the next one catches up.
+[Unit]
+Description=finance-digest preparation every 3 hours
+
+[Timer]
+OnCalendar=*-*-* 02,05,11,14,17,23:00:00 Europe/Kyiv
+
+[Install]
+WantedBy=timers.target

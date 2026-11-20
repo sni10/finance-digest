@@ -1,0 +1,14 @@
+# The digest run: collect, then the whole pipeline (group, facts, digest, send). Started by finance-digest.timer.
+# Waits for a prepare run still going (one run at a time: memory, and no event handled twice).
+# Logs: journalctl -u finance-digest
+[Unit]
+Description=finance-digest: collect, write and send the markets digest
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/home/deploy/finance-digest
+ExecStart=/usr/bin/flock /tmp/finance-digest.lock /usr/bin/docker compose -f compose.prod.yaml run --rm app
+TimeoutStartSec=4h

@@ -14,3 +14,4 @@ htmlcov/
 # local cheat sheet with credentials
 LOCAL.md
 .ruff_cache/
+/docs/DEPLOY.md

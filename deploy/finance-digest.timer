@@ -1,0 +1,10 @@
+# The digest at 08:00 and 20:00 Kyiv time, summer time included (the server's clock is UTC).
+[Unit]
+Description=finance-digest digest at 08:00 and 20:00 Europe/Kyiv
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 Europe/Kyiv
+OnCalendar=*-*-* 20:00:00 Europe/Kyiv
+
+[Install]
+WantedBy=timers.target

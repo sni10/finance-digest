@@ -1,0 +1,14 @@
+# Between digests: collect, group and extract facts in small batches, so the 08:00/20:00 run only has the last
+# few hours left and the digest goes out on time. Skipped quietly while another run holds the lock.
+# Logs: journalctl -u finance-digest-prepare
+[Unit]
+Description=finance-digest: collect, group and check facts ahead of the digest
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/home/deploy/finance-digest
+ExecStart=/usr/bin/flock --nonblock /tmp/finance-digest.lock /usr/bin/docker compose -f compose.prod.yaml run --rm app sh -c "python manage.py collect && python manage.py pipeline --stage group --stage facts"
+TimeoutStartSec=3h
