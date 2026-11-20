@@ -22,7 +22,7 @@ from llm.client import LLMClient, LLMError
 from .models import Digest, Event, Fact, PipelineRun
 from .models_manager import LoadSpec, LmsModelManager, NoModelManager
 from .steps.classify import EventClassifier
-from .steps.digest import ASSETS, DigestWriter, EventBrief, digest_title, render
+from .steps.digest import ASSETS, DigestWriter, EventBrief, digest_title, kept_items, render
 from .steps.facts import FactExtractor, FactVerifier, check_facts
 from .steps.grouping import Grouper, ungrouped_articles
 from .telegram import Telegram, TelegramError
@@ -166,28 +166,29 @@ class Pipeline:
         if not events:
             return {'events': 0}
         briefs = {number: self._brief(number, event) for number, event in enumerate(events, 1)}
+        max_items = self.digest_config.max_items
         self.manager.use(*self.writer)
-        answer = DigestWriter(self.client, self.writer_model).write(list(briefs.values()))
+        answer = DigestWriter(self.client, self.writer_model).write(list(briefs.values()), max_items)
         title = digest_title(timezone.localtime(timezone=ZoneInfo(self.digest_config.time_zone)))
+        items = kept_items(answer, briefs, max_items)
         with transaction.atomic():
             digest = Digest.objects.create(
                 title=title, overview=answer.overview,
-                items=[{**item.model_dump(), 'category': briefs[item.event].category}
-                       for item in answer.items if item.event in briefs],
+                items=[{**item.model_dump(), 'category': briefs[item.events[0]].category} for item in items],
                 forecast=[{'asset': asset, **getattr(answer.forecast, asset).model_dump()} for asset, _ in ASSETS],
-                messages=render(title, answer, briefs), writer_model=self.writer_model,
+                messages=render(title, answer, briefs, max_items), writer_model=self.writer_model,
             )
-            digest.events.set(events)
+            digest.events.set(events)  # all given, told or left out: a left-out event is not offered again
             for event in events:
                 self._set(event, Event.Status.DIGESTED)
-        written = {item['event'] for item in digest.items}
+        written = {number for item in items for number in item.events}
         for number, event in zip(briefs, events):
             if number not in written:
                 self.progress(f'event {event.pk} left out by the writer: {event.title[:60]}')
-        self.progress(f'digest {digest.pk}: {title}, {len(digest.items)} items, {len(digest.forecast)} forecast '
-                      f'lines, {len(digest.messages)} messages')
-        return {'events': len(events), 'items': len(digest.items), 'left_out': len(briefs) - len(written),
-                'digest': digest.pk}
+        self.progress(f'digest {digest.pk}: {title}, {len(items)} items from {len(written)} events, '
+                      f'{len(digest.messages)} messages')
+        return {'events': len(events), 'items': len(items), 'merged': len(written) - len(items),
+                'left_out': len(briefs) - len(written), 'digest': digest.pk}
 
     @staticmethod
     def _brief(number: int, event: Event) -> EventBrief:

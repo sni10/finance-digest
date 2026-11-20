@@ -1,8 +1,9 @@
+import httpx
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from llm.client import LLMError, LMStudioClient
-from pipeline.models_manager import LmsModelManager, ModelLoadError, NoModelManager
+from pipeline.models_manager import ApiModelManager, LmsModelManager, ModelLoadError, NoModelManager
 from pipeline.runner import STAGES, Pipeline
 
 
@@ -24,23 +25,44 @@ class Command(BaseCommand):
         if max_events:
             config = config.model_copy(update={'max_events': max_events})
         client = LMStudioClient.from_settings(settings.LM_STUDIO)
-        if not set(stages or STAGES) <= {'send'}:  # sending needs no LM Studio
+        stages = stages or list(STAGES)
+        if not set(stages) <= {'send'}:  # sending needs no LM Studio
             try:
                 client.list_models()
             except LLMError as exc:
-                raise CommandError(str(exc)) from exc
+                # the PC is off or unreachable: what is written still goes out, the rest waits for the next run
+                if 'send' in stages:
+                    self.stdout.write(self.style.WARNING('LM Studio unreachable: sending what is written only'))
+                    Pipeline(client, settings.LM_STUDIO, config, NoModelManager(),
+                             progress=self.stdout.write).run(['send'])
+                raise CommandError(f'LM Studio unreachable, nothing new this run: {exc}') from exc
 
-        manage = config.manage_models and not no_manage_models
-        manager = LmsModelManager(config.idle_ttl, progress=self._note) if manage else NoModelManager()
-        pipeline = Pipeline(client, settings.LM_STUDIO, config, manager, progress=self.stdout.write, events=events)
-        try:
-            run = pipeline.run(stages or STAGES)
-        except ModelLoadError as exc:
-            raise CommandError(str(exc)) from exc
+        with httpx.Client(timeout=settings.LM_STUDIO.timeout) as http:
+            manager = self._manager(config, no_manage_models, http)
+            pipeline = Pipeline(client, settings.LM_STUDIO, config, manager, progress=self.stdout.write,
+                                events=events)
+            try:
+                run = pipeline.run(stages)
+            except ModelLoadError as exc:
+                raise CommandError(str(exc)) from exc
+            finally:
+                try:
+                    manager.release()  # the writer is not left in the PC's VRAM after a server run
+                except ModelLoadError as exc:
+                    self._note(f'release failed: {exc}')
         for stage, stats in run.stats.items():
             shown = {key: value for key, value in stats.items() if key != 'rejected'}
             self.stdout.write(self.style.MIGRATE_HEADING(stage) + f' {shown}')
         self.stdout.write(self.style.SUCCESS(f'run {run.pk} done: digests in /admin/pipeline/digest/'))
+
+    def _manager(self, config, no_manage_models, http):
+        if not config.manage_models or no_manage_models:
+            return NoModelManager()
+        if config.model_loader == 'api':
+            lm_studio = settings.LM_STUDIO
+            root = lm_studio.base_url.rstrip('/').removesuffix('/v1')
+            return ApiModelManager(http, root, lm_studio.api_key.get_secret_value(), progress=self._note)
+        return LmsModelManager(config.idle_ttl, progress=self._note)
 
     def _note(self, line: str) -> None:
         self.stdout.write(self.style.WARNING(f'[lms] {line}'))

@@ -94,6 +94,8 @@ class PipelineSettings(Section):
     min_facts: int = Field(3, ge=1, description='Fewer verified facts: not in the digest')
     # Model loading through the lms CLI: one big model in VRAM at a time (spec §4)
     manage_models: bool = True
+    # lms: the CLI next to LM Studio (the PC); api: LM Studio's REST API, for a pipeline elsewhere (the server)
+    model_loader: Literal['lms', 'api'] = 'lms'
     worker_context: int = 8192
     writer_context: int = 16384
     writer_gpu: str = '0.6'  # offload ratio: 27B Q4 does not fit 12 GB whole
@@ -105,7 +107,9 @@ class DigestSettings(Section):
 
     model_config = SettingsConfigDict(env_prefix='DIGEST_')
 
-    max_events: int = Field(12, ge=1, description='The most covered events of the period that go into one digest')
+    max_events: int = Field(16, ge=1, description='The most covered events of the period offered to the writer')
+    max_items: int = Field(12, ge=1, description='Items in one digest: the writer merges events of one story into '
+                                                 'one item and leaves out the least important')
     period_hours: int = Field(24, ge=1, description='Events with articles this recent; older ones are left out')
     time_zone: str = 'Europe/Kyiv'  # the date and "morning/evening" in the digest's title
 

@@ -2,6 +2,7 @@ import json
 from datetime import timedelta
 from unittest import mock
 
+import httpx
 from django.conf import settings
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
@@ -9,7 +10,7 @@ from pydantic import SecretStr
 
 from llm.client import Completion, Usage
 from pipeline.models import Digest, Event, Fact
-from pipeline.models_manager import LmsModelManager, LoadSpec
+from pipeline.models_manager import ApiModelManager, LmsModelManager, LoadSpec, ModelLoadError
 from pipeline.runner import Pipeline
 from pipeline.steps.facts import quote_context
 from pipeline.telegram import TelegramError
@@ -53,7 +54,7 @@ class FakeLM:
             given = [int(line.split()[1]) for line in user.split('\n') if line.startswith('Event ')]
             numbers = given if self.digest_items is None else self.digest_items
             value = {'overview': 'ФРС повысила ставку.',
-                     'items': [{'event': number, 'headline': 'ФРС повысила ставку до 4,75%',
+                     'items': [{'events': [number], 'headline': 'ФРС повысила ставку до 4,75%',
                                 'text': 'Решение приняли 9 голосами против 3.'} for number in numbers],
                      'forecast': {'gold': {'direction': 'down', 'reason': 'Ставка выше, золото дешевле.'},
                                   'brent': {'direction': 'flat', 'reason': 'Новостей по нефти нет.'},
@@ -178,7 +179,7 @@ class PipelineTests(TestCase):
 
         self.run_pipeline()
 
-        self.assertEqual([item['event'] for item in Digest.objects.get().items], [1])
+        self.assertEqual([item['events'] for item in Digest.objects.get().items], [[1]])
 
     def test_a_single_source_event_waits_for_other_sources(self):
         self.run_pipeline(single_source_wait_hours=24)
@@ -234,6 +235,44 @@ class QuoteContextTests(TestCase):
         article = make_article(source, 'q', 'Title', 'One.\nTwo has the quote.\nThree.\nFour.', hours_ago=1)
 
         self.assertEqual(quote_context('the quote', article), 'One.\nTwo has the quote.\nThree.')
+
+
+class ApiModelManagerTests(SimpleTestCase):
+    def test_swaps_models_through_the_rest_api_and_releases_only_its_own(self):
+        calls, loaded = [], {'big-writer': 'big-writer', 'embed': 'embed'}  # instance id -> model key
+
+        def handler(request):
+            body = json.loads(request.content) if request.content else None
+            calls.append((request.method, request.url.path, body))
+            if request.url.path == '/api/v1/models':
+                return httpx.Response(200, json={'models': [
+                    {'key': key, 'loaded_instances': [{'id': i} for i, k in loaded.items() if k == key]}
+                    for key in ('big-writer', 'embed', 'worker')]})
+            if request.url.path.endswith('/load'):
+                loaded[body['model']] = body['model']
+                return httpx.Response(200, json={'instance_id': body['model'], 'status': 'loaded'})
+            loaded.pop(body['instance_id'])
+            return httpx.Response(200, json={'instance_id': body['instance_id']})
+
+        manager = ApiModelManager(httpx.Client(transport=httpx.MockTransport(handler)), 'http://pc:1234/', 'key')
+        manager.use(LoadSpec('worker', context=8192), LoadSpec('embed'))
+        manager.release()
+
+        self.assertEqual([call for call in calls if call[0] == 'POST'], [
+            ('POST', '/api/v1/models/unload', {'instance_id': 'big-writer'}),
+            ('POST', '/api/v1/models/load', {'model': 'worker', 'context_length': 8192}),
+            ('POST', '/api/v1/models/unload', {'instance_id': 'worker'}),  # embed was there before: kept
+        ])
+        self.assertEqual(set(loaded), {'embed'})
+
+    def test_an_unreachable_pc_is_a_load_error(self):
+        def handler(request):
+            raise httpx.ConnectError('no route to host')
+
+        manager = ApiModelManager(httpx.Client(transport=httpx.MockTransport(handler)), 'http://pc:1234')
+        with self.assertRaisesRegex(ModelLoadError, 'no route to host'):
+            manager.use(LoadSpec('worker'))
+        manager.release()  # nothing loaded: no call, no error
 
 
 class LmsModelManagerTests(SimpleTestCase):
